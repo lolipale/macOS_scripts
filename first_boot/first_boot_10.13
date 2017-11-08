@@ -1,0 +1,614 @@
+#!/bin/bash
+
+# Initial setup script for Mac OS X 10.13.x
+# Rich Trouton, created September 29, 2017
+# Last modified 8-12-2015
+#
+# Adapted from Initial setup script for Mac OS X 10.13.x
+# Rich Trouton, created August 20, 2014
+# Last modified 11-8-2017, pbe
+
+# Sleeping for 30 seconds to allow the new default User Template folder to be moved into place
+
+/bin/sleep 30
+
+# ----------------------------------------------------------------------------------------
+# Variables
+# ----------------------------------------------------------------------------------------
+defaults="/usr/bin/defaults"
+bud="/usr/libexec/PlistBuddy"
+
+_dns1="192.168.100.225"
+_dns2="192.168.100.226"
+_searchdomain="rdr.local"
+_ODserver="od.rdrlan.ch"
+_ADserver="srvad001.rdrlan.ch"
+
+_language="fr"
+_country="CH"
+_locale="$_language"_"$_country"
+
+SYS_SERIAL=$(/usr/sbin/ioreg -l | /usr/bin/grep IOPlatformSerialNumber | /usr/bin/awk '{print $4}' | /usr/bin/cut -d \" -f 2)
+
+# Determine OS version and build version
+# as part of the following actions to disable
+# the iCloud and Diagnostic pop-up windows
+
+osvers=$(sw_vers -productVersion | awk -F. '{print $2}')
+sw_vers=$(sw_vers -productVersion)
+sw_build=$(sw_vers -buildVersion)
+IS_LAPTOP=`/usr/sbin/system_profiler SPHardwareDataType | grep "Model Identifier" | grep "Book"`
+
+# ----------------------------------------------------------------------------------------
+# Generic Settings by default (all workstations)
+# ----------------------------------------------------------------------------------------
+
+##########################################################################################
+# Workstation Configuration                                                              #
+##########################################################################################
+
+# Set separate power management settings for desktops and laptops
+# If it's a laptop, the power management settings for "Battery" are set to have the computer sleep in 15 minutes, disk will spin down 
+# in 10 minutes, the display will sleep in 5 minutes and the display itslef will dim to half-brightness before sleeping. While plugged 
+# into the AC adapter, the power management settings for "Charger" are set to have the computer never sleep, the disk doesn't spin down, 
+# the display sleeps after 30 minutes and the display dims before sleeping.
+# 
+# If it's not a laptop (i.e. a desktop), the power management settings are set to have the computer never sleep, the disk doesn't spin down, the display 
+# sleeps after 30 minutes and the display dims before sleeping.
+#
+# Detects if this Mac is a laptop or not by checking the model ID for the word "Book" in the name.
+
+if [ "$IS_LAPTOP" != "" ]; then
+	pmset -b sleep 15 disksleep 10 displaysleep 5 halfdim 1
+	pmset -c sleep 0 disksleep 0 displaysleep 30 halfdim 1
+else	
+	pmset sleep 0 disksleep 0 displaysleep 30 halfdim 1
+fi
+logger "PowerManagement has been set"
+
+# Disable the sound effects on boot
+nvram SystemAudioVolume=" "
+logger "Sound on boot has been disabled"
+
+# Set the login window to name and password
+/usr/bin/defaults write /Library/Preferences/com.apple.loginwindow SHOWFULLNAME -bool true
+logger "Login window has been set to name and password"
+
+# Disable external accounts (i.e. accounts stored on drives other than the boot drive.)
+/usr/bin/defaults write /Library/Preferences/com.apple.loginwindow EnableExternalAccounts -bool false
+logger "External accounts has been disabled"
+
+# Set the ability to view additional system info at the Login window
+# The following will be reported when you click on the time display 
+# (click on the time again to proceed to the next item):
+#
+# Computer name
+# Version of OS X installed
+# IP address
+# This will remain visible for 60 seconds.
+/usr/bin/defaults write /Library/Preferences/com.apple.loginwindow AdminHostInfo HostName
+logger "Ability to view additional system info at the Login window has been set"
+
+# Enable root account
+dsenableroot -u localadm -p miracles -r miracles
+logger "Root account has been enabled"
+
+# Disable root login by setting root's shell to /usr/bin/false
+# Note: Setting this value has been known to cause issues seen
+# by others when they used Casper's FileVault 2 management.
+# If you are running Casper and see problems encrypting, the
+# original UserShell value is as follows:
+#
+# /bin/sh
+#
+# To revert it back to /bin/sh, run the following command:
+# /usr/bin/dscl . -change /Users/root UserShell /usr/bin/false /bin/sh
+# /usr/bin/dscl . -create /Users/root UserShell /usr/bin/false
+
+# Sets the "Show scroll bars" setting (in System Preferences: General)
+# to "Always" in your Mac's default user template and for all existing users.
+# Code adapted from DeployStudio's rc130 ds_finalize script, where it's 
+# disabling the iCloud and gestures demos
+
+# Checks the system default user template for the presence of 
+# the Library/Preferences directory. If the directory is not found, 
+# it is created and then the "Show scroll bars" setting (in System 
+# Preferences: General) is set to "Always".
+
+if [ -d /Users/Library ]
+	then
+	rm -rf /Users/Library
+fi
+
+for USER_TEMPLATE in "/System/Library/User Template"/*
+  do
+     if [ ! -d "${USER_TEMPLATE}"/Library/Preferences ]
+      then
+        mkdir -p "${USER_TEMPLATE}"/Library/Preferences
+     fi
+     if [ ! -d "${USER_TEMPLATE}"/Library/Preferences/ByHost ]
+      then
+        mkdir -p "${USER_TEMPLATE}"/Library/Preferences/ByHost
+     fi
+     if [ -d "${USER_TEMPLATE}"/Library/Preferences/ByHost ]
+      then
+        /usr/bin/defaults write "${USER_TEMPLATE}"/Library/Preferences/.GlobalPreferences AppleShowScrollBars -string Always
+        /usr/bin/defaults write "${USER_TEMPLATE}"/Library/Preferences/.GlobalPreferences AppleLocale $_locale
+	/usr/bin/defaults write "${USER_TEMPLATE}"/Library/Preferences/.GlobalPreferences Country $_country
+	/usr/bin/defaults write "${USER_TEMPLATE}"/Library/Preferences/.GlobalPreferences AppleMeasurementUnits -string Centimeters
+	/usr/bin/defaults write "${USER_TEMPLATE}"/Library/Preferences/.GlobalPreferences AppleMetricUnits -bool True
+	/usr/bin/defaults write com.apple.finder NewWindowTarget -string "PfDe"
+	/usr/bin/defaults write com.apple.finder NewWindowTargetPath -string "file://${USER_TEMPLATE}/Desktop/"	
+     fi
+  done
+
+# Checks the existing user folders in /Users for the presence of
+# the Library/Preferences directory. If the directory is not found, 
+# it is created and then the "Show scroll bars" setting (in System 
+# Preferences: General) is set to "Always".
+
+for USER_HOME in /Users/*
+  do
+    USER_UID=`basename "${USER_HOME}"`
+    if [ ! "${USER_UID}" = "Shared" ] 
+     then 
+      if [ ! -d "${USER_HOME}"/Library/Preferences ]
+       then
+        mkdir -p "${USER_HOME}"/Library/Preferences
+        chown "${USER_UID}" "${USER_HOME}"/Library
+        chown "${USER_UID}" "${USER_HOME}"/Library/Preferences
+      fi
+      if [ ! -d "${USER_HOME}"/Library/Preferences/ByHost ]
+       then
+        mkdir -p "${USER_HOME}"/Library/Preferences/ByHost
+        chown "${USER_UID}" "${USER_HOME}"/Library
+        chown "${USER_UID}" "${USER_HOME}"/Library/Preferences
+		chown "${USER_UID}" "${USER_HOME}"/Library/Preferences/ByHost
+      fi
+      if [ -d "${USER_HOME}"/Library/Preferences/ByHost ]
+       then
+        /usr/bin/defaults write "${USER_HOME}"/Library/Preferences/.GlobalPreferences AppleShowScrollBars -string Always
+        /usr/bin/defaults write "${USER_HOME}"/Library/Preferences/.GlobalPreferences AppleLocale $_locale
+	/usr/bin/defaults write "${USER_HOME}"/Library/Preferences/.GlobalPreferences Country $_country
+	/usr/bin/defaults write "${USER_HOME}"/Library/Preferences/.GlobalPreferences AppleMeasurementUnits -string Centimeters
+	/usr/bin/defaults write "${USER_HOME}"/Library/Preferences/.GlobalPreferences AppleMetricUnits -bool True
+	/usr/bin/defaults write com.apple.finder NewWindowTarget -string "PfDe"
+	/usr/bin/defaults write com.apple.finder NewWindowTargetPath -string "file://${USER_HOME}/Desktop/"
+        chown "${USER_UID}" "${USER_HOME}"/Library/Preferences/.GlobalPreferences.*
+   	 fi
+	fi
+  done
+  
+# Checks first to see if the Mac is running 10.7.0 or higher. 
+# If so, the script checks the system default user template
+# for the presence of the Library/Preferences directory.
+#
+# If the directory is not found, it is created and then the
+# iCloud and Diagnostic pop-up settings are set to be disabled.
+
+if [[ ${osvers} -ge 7 ]]; then
+
+ for USER_TEMPLATE in "/System/Library/User Template"/*
+  do
+    /usr/bin/defaults write "${USER_TEMPLATE}"/Library/Preferences/com.apple.SetupAssistant DidSeeCloudSetup -bool true
+    /usr/bin/defaults write "${USER_TEMPLATE}"/Library/Preferences/com.apple.SetupAssistant GestureMovieSeen none
+    /usr/bin/defaults write "${USER_TEMPLATE}"/Library/Preferences/com.apple.SetupAssistant LastSeenCloudProductVersion "${sw_vers}"
+    /usr/bin/defaults write "${USER_TEMPLATE}"/Library/Preferences/com.apple.SetupAssistant LastSeenBuddyBuildVersion "${sw_build}"
+    /usr/bin/defaults write "${USER_TEMPLATE}"/Library/Preferences/com.apple.SetupAssistant DidSeeSiriSetup -bool TRUE 
+  done
+
+ # Checks first to see if the Mac is running 10.7.0 or higher.
+ # If so, the script checks the existing user folders in /Users
+ # for the presence of the Library/Preferences directory.
+ #
+ # If the directory is not found, it is created and then the
+ # iCloud and Diagnostic pop-up settings are set to be disabled.
+
+ for USER_HOME in /Users/*
+  do
+    USER_UID=`basename "${USER_HOME}"`
+    if [ ! "${USER_UID}" = "Shared" ] 
+    then 
+      if [ ! -d "${USER_HOME}"/Library/Preferences ]
+      then
+        mkdir -p "${USER_HOME}"/Library/Preferences
+        chown "${USER_UID}" "${USER_HOME}"/Library
+        chown "${USER_UID}" "${USER_HOME}"/Library/Preferences
+      fi
+      if [ -d "${USER_HOME}"/Library/Preferences ]
+      then
+        /usr/bin/defaults write "${USER_HOME}"/Library/Preferences/com.apple.SetupAssistant DidSeeCloudSetup -bool true
+        /usr/bin/defaults write "${USER_HOME}"/Library/Preferences/com.apple.SetupAssistant GestureMovieSeen none
+        /usr/bin/defaults write "${USER_HOME}"/Library/Preferences/com.apple.SetupAssistant LastSeenCloudProductVersion "${sw_vers}"
+        /usr/bin/defaults write "${USER_HOME}"/Library/Preferences/com.apple.SetupAssistant LastSeenBuddyBuildVersion "${sw_build}"
+        /usr/bin/defaults write "${USER_TEMPLATE}"/Library/Preferences/com.apple.SetupAssistant DidSeeSiriSetup -bool TRUE 
+       	/usr/sbin/chown "${USER_UID}" "${USER_HOME}"/Library/Preferences/com.apple.SetupAssistant.plist
+      fi
+    fi
+  done
+fi
+
+# Set whether you want to send diagnostic info back to
+# Apple and/or third party app developers. If you want
+# to send diagonostic data to Apple, set the following 
+# value for the SUBMIT_DIAGNOSTIC_DATA_TO_APPLE value:
+#
+# SUBMIT_DIAGNOSTIC_DATA_TO_APPLE=TRUE
+# 
+# If you want to send data to third party app developers,
+# set the following value for the
+# SUBMIT_DIAGNOSTIC_DATA_TO_APP_DEVELOPERS value:
+#
+# SUBMIT_DIAGNOSTIC_DATA_TO_APP_DEVELOPERS=TRUE
+# 
+# By default, the values in this script are set to 
+# send no diagnostic data: 
+
+SUBMIT_DIAGNOSTIC_DATA_TO_APPLE=FALSE
+SUBMIT_DIAGNOSTIC_DATA_TO_APP_DEVELOPERS=FALSE
+
+# To change this in your own script, comment out the FALSE
+# lines and uncomment the TRUE lines as appropriate.
+
+# Set the appropriate number value for AutoSubmitVersion
+# and ThirdPartyDataSubmitVersion by the OS version. 
+# For 10.10.x, the value will be 4. 
+# For 10.11.x, the value will be 5.
+# For 10.12.x, the value will be 5.
+
+
+if [[ ${osvers} -eq 10 ]]; then
+  VERSIONNUMBER=4
+elif [[ ${osvers} -ge 11 ]]; then
+  VERSIONNUMBER=5
+elif [[ ${osvers} -ge 12 ]]; then
+  VERSIONNUMBER=6
+fi
+
+
+# Checks first to see if the Mac is running 10.10.0 or higher. 
+# If so, the desired diagnostic submission settings are applied.
+
+if [[ ${osvers} -ge 10 ]]; then
+
+  CRASHREPORTER_SUPPORT="/Library/Application Support/CrashReporter"
+ 
+  if [ ! -d "${CRASHREPORTER_SUPPORT}" ]; then
+    /bin/mkdir "${CRASHREPORTER_SUPPORT}"
+    /bin/chmod 775 "${CRASHREPORTER_SUPPORT}"
+    /usr/sbin/chown root:admin "${CRASHREPORTER_SUPPORT}"
+  fi
+
+ /usr/bin/defaults write "$CRASHREPORTER_SUPPORT"/DiagnosticMessagesHistory AutoSubmit -boolean ${SUBMIT_DIAGNOSTIC_DATA_TO_APPLE}
+ /usr/bin/defaults write "$CRASHREPORTER_SUPPORT"/DiagnosticMessagesHistory AutoSubmitVersion -int ${VERSIONNUMBER}
+ /usr/bin/defaults write "$CRASHREPORTER_SUPPORT"/DiagnosticMessagesHistory ThirdPartyDataSubmit -boolean ${SUBMIT_DIAGNOSTIC_DATA_TO_APP_DEVELOPERS}
+ /usr/bin/defaults write "$CRASHREPORTER_SUPPORT"/DiagnosticMessagesHistory ThirdPartyDataSubmitVersion -int ${VERSIONNUMBER}
+ /bin/chmod a+r "$CRASHREPORTER_SUPPORT"/DiagnosticMessagesHistory.plist
+ /usr/sbin/chown root:admin "$CRASHREPORTER_SUPPORT"/DiagnosticMessagesHistory.plist
+
+fi
+
+# Disable Setup and Registration
+/usr/bin/touch "/private/var/db/.AppleSetupDone"
+/usr/bin/touch "/Library/Receipts/.SetupRegComplete"
+logger "SetUp and registration has been disabled"
+
+# Disable Siri Assistant
+/usr/bin/defaults write com.apple.SetupAssistant DidSeeSiriSetup -bool false
+logger "Siri Assistant has been disabled"
+
+# Enable auto-correct
+/usr/bin/defaults write NSGlobalDomain NSAutomaticSpellingCorrectionEnabled -bool true
+logger "Auto-correct has been enabled"
+
+# Disable App-Nap for all application
+/usr/bin/defaults write NSGlobalDomain NSAppSleepDisabled -bool YES
+logger "App Nap has been disabled for all application"
+
+# Disable automatic termination of inactive apps
+/usr/bin/defaults write NSGlobalDomain NSDisableAutomaticTermination -bool true
+logger "Automatic termination of inactive apps has been disabled"
+
+# Disable auto-correct
+defaults write NSGlobalDomain NSAutomaticSpellingCorrectionEnabled -bool false
+logger "Auto-correct has been disabled"
+
+# Disable “natural” (Lion-style) scrolling
+defaults write NSGlobalDomain com.apple.swipescrolldirection -bool false
+logger "Natural scrolling has been disabled"
+
+# Enable full keyboard access for all controls
+# (e.g. enable Tab in modal dialogs)
+defaults write NSGlobalDomain AppleKeyboardUIMode -int 3
+logger "Full keyboard access for all controls has been enabled"
+
+# Expand save panel by default
+/usr/bin/defaults write NSGlobalDomain NSNavPanelExpandedStateForSaveMode -bool true
+/usr/bin/defaults write NSGlobalDomain NSNavPanelExpandedStateForSaveMode2 -bool true
+logger "Expand save panel by default has been set"
+
+# Expand print panel by default
+/usr/bin/defaults write NSGlobalDomain PMPrintingExpandedStateForPrint -bool true
+/usr/bin/defaults write NSGlobalDomain PMPrintingExpandedStateForPrint2 -bool true
+logger "Expand print panel by default has been set"
+
+# Save to disk (not to iCloud) by default
+/usr/bin/defaults write NSGlobalDomain NSDocumentSaveNewDocumentsToCloud -bool false
+logger "Save to disk by default (not to iCloud) has been set"
+
+# Finder: show all filename extensions
+/usr/bin/defaults write NSGlobalDomain AppleShowAllExtensions -bool true
+logger "Finder: show all filename extensions is enabled"
+
+# Enable spring loading for directories
+/usr/bin/defaults write NSGlobalDomain com.apple.springing.enabled -bool true
+logger "Spring loading for directories is enabled"
+
+# Remove the spring loading delay for directories
+/usr/bin/defaults write NSGlobalDomain com.apple.springing.delay -float 0
+logger "The spring loading delay for directories is removed"
+
+# Allow all users to manage printers
+/usr/sbin/dseditgroup -o edit -n /Local/Default -a everyone -t group lpadmin
+logger "All users are allowed to manage printers"
+
+# Allow all users to manage network interface
+/usr/bin/security authorizationdb write system.preferences allow
+/usr/bin/security authorizationdb write system.preferences.network allow
+/usr/bin/security authorizationdb write system.services.systemconfiguration.network allow
+logger "All users are allowed to manage network interfaces"
+
+# Turn SSH on
+systemsetup -setremotelogin on
+logger "SSH is turned on"
+
+# Turn off Gatekeeper
+spctl --master-disable
+logger "Gatekeeper is turned off"
+
+# Disable Gatekeeper's auto-rearm. Otherwise Gatekeeper
+# will reactivate every 30 days. When it reactivates, it
+# will be be set to "Mac App Store and identified developers"
+/usr/bin/defaults write /Library/Preferences/com.apple.security GKAutoRearm -bool false
+logger "Gatekeeper's auto-rearm has been disabled"
+
+# Never go into computer sleep mode
+systemsetup -setcomputersleep Off > /dev/null
+logger "Computer is set to never go into sleep mode"
+
+# Turn off Apple Software Update
+softwareupdate --schedule off
+logger "Apple Software Update is turned off"
+
+# Restart automatically if the computer freezes
+systemsetup -setrestartfreeze on
+logger "Restart automatically if the computer freezes has been set"
+
+# Disable hibernation (speeds up entering sleep mode)
+pmset -a hibernatemode 0
+logger "Hibernation has been disabled"
+
+# Disable the sudden motion sensor as it’s not useful for SSDs
+sudo pmset -a sms 0
+logger "Sudden motion sensor has been disabled"
+
+# Remove the sleep image file to save disk space
+sudo rm /private/var/vm/sleepimage
+# Create a zero-byte file instead…
+sudo touch /private/var/vm/sleepimage
+# …and make sure it can’t be rewritten
+sudo chflags uchg /private/var/vm/sleepimage
+logger "Sleep image file is removed"
+
+# Set the RSA maximum key size to 32768 bits (32 kilobits) in
+# /Library/Preferences/com.apple.security.plist to provide
+# future-proofing against larger TLS certificate key sizes.
+#
+# For more information about this issue, please see the link below:
+# http://blog.shiz.me/post/67305143330/8192-bit-rsa-keys-in-os-x
+
+/usr/bin/defaults write /Library/Preferences/com.apple.security RSAMaxKeySize -int 32768
+
+# Set a custom wallpaper image. `DefaultDesktop.jpg` is already a symlink, and
+# all wallpapers are in `/Library/Desktop Pictures/`. The default is `Wave.jpg`.
+
+
+##########################################################################################
+# Symbolic links                                                                         #
+##########################################################################################
+
+# Make a symbolic link from /System/Library/CoreServices/Applications/Directory Utility.app 
+# to /Applications/Utilities so that Directory Utility.app is easier to access.
+
+if [[ ! -e "/Applications/Utilities/Directory Utility.app" ]]; then
+   ln -s "/System/Library/CoreServices/Applications/Directory Utility.app" "/Applications/Utilities/Directory Utility.app"
+fi
+
+if [[ -L "/Applications/Utilities/Directory Utility.app" ]]; then
+   rm "/Applications/Utilities/Directory Utility.app"
+   ln -s "/System/Library/CoreServices/Applications/Directory Utility.app" "/Applications/Utilities/Directory Utility.app"
+fi
+
+# Make a symbolic link from /System/Library/CoreServices/Applications/Network Utility.app 
+# to /Applications/Utilities so that Network Utility.app is easier to access.
+
+if [[ ! -e "/Applications/Utilities/Network Utility.app" ]]; then
+   ln -s "/System/Library/CoreServices/Applications/Network Utility.app" "/Applications/Utilities/Network Utility.app"
+fi
+
+if [[ -L "/Applications/Utilities/Network Utility.app" ]]; then
+   rm "/Applications/Utilities/Network Utility.app"
+   ln -s "/System/Library/CoreServices/Applications/Network Utility.app" "/Applications/Utilities/Network Utility.app"
+fi
+
+# Make a symbolic link from /System/Library/CoreServices/Screen Sharing.app 
+# to /Applications/Utilities so that Screen Sharing.app is easier to access.
+
+if [[ ! -e "/Applications/Utilities/Screen Sharing.app" ]]; then
+   ln -s "/System/Library/CoreServices/Applications/Screen Sharing.app" "/Applications/Utilities/Screen Sharing.app"
+fi
+
+if [[ -L "/Applications/Utilities/Screen Sharing.app" ]]; then
+   rm "/Applications/Utilities/Screen Sharing.app"
+   ln -s "/System/Library/CoreServices/Applications/Screen Sharing.app" "/Applications/Utilities/Screen Sharing.app"
+fi
+
+##########################################################################################
+# Time Machine                                                                           #
+##########################################################################################
+
+# Disable Time Machine's pop-up message whenever an external drive is plugged in
+/usr/bin/defaults write /Library/Preferences/com.apple.TimeMachine DoNotOfferNewDisksForBackup -bool true
+logger "Time Machine's pop-up message whenever an external drive is plugged in has been disabled"
+
+# Disabling local Time Machine backups
+hash tmutil &> /dev/null && sudo tmutil disablelocal
+logger "Local Time Machine has been disabled"
+
+
+# ----------------------------------------------------------------------------------------
+# Settings for RDR (all workstations)
+# ----------------------------------------------------------------------------------------
+
+##########################################################################################
+# Open Directory                                                                         #
+##########################################################################################
+
+# UnBind to OD
+dsconfigldap -r $_ODserver
+logger "Unbind to OD is finish"
+
+##########################################################################################
+# Network Location                                                                       #
+##########################################################################################
+
+# Create network location
+location[1]="Au bureau"
+location[2]="A l'extérieur"
+
+/usr/sbin/networksetup -detectnewhardware > /dev/null 2>&1
+
+
+for i in ${!location[*]}; do
+location_name=${location[$i]}
+network_location=($(networksetup -listlocations | grep "$location_name"$))
+
+if [ $network_location="" ]
+then
+	/usr/sbin/networksetup -createlocation "$location_name" populate > /dev/null 2>&1
+	/usr/sbin/networksetup -switchtolocation "$location_name"
+	/usr/sbin/networksetup -createnetworkservice 'Ethernet RDR' Ethernet  > /dev/null 2>&1
+	/usr/sbin/networksetup -createnetworkservice 'WiFi' Wi-Fi  > /dev/null 2>&1
+fi
+/usr/sbin/networksetup -removenetworkservice 'Ethernet' Ethernet  > /dev/null 2>&1
+/usr/sbin/networksetup -removenetworkservice 'Wi-Fi' Wi-Fi  > /dev/null 2>&1
+done
+
+/usr/sbin/networksetup -switchtolocation "${location[2]}" > /dev/null 2>&1
+/usr/sbin/networksetup -setnetworkserviceenabled 'Ethernet RDR' off
+/usr/sbin/networksetup -setnetworkserviceenabled 'WiFi' on
+/usr/sbin/networksetup -switchtolocation "${location[1]}" > /dev/null 2>&1
+/usr/sbin/networksetup -setnetworkserviceenabled 'Ethernet RDR' on
+/usr/sbin/networksetup -setnetworkserviceenabled 'WiFi' off
+logger "Network locations are successfully created"
+
+##########################################################################################
+# Network configuration                                                                  #
+##########################################################################################
+
+# Disable IPv6 on all interfaces and set Ethernet interfaces
+IFS=$'\n'
+
+net=`networksetup -listallnetworkservices | grep -v asterisk`
+
+for i in $net; do
+	networksetup -setv6off "$i" > /dev/null 2>&1
+done
+
+OLDIFS=$IFS
+IFS=$'\n'
+ethernet_interface=($(networksetup -listallnetworkservices | awk '/Ethernet/'))
+IFS=$OLDIFS
+tLen=${#ethernet_interface[@]}
+
+for (( i=0; i<${tLen}; i++ ));
+  do
+     logger "`date +%Y-%m-%d\ %H:%M:%S`  Setting "${ethernet_interface[$i]}" on this Mac."
+     /usr/sbin/networksetup -setsearchdomains "${ethernet_interface[$i]}" $_searchdomain >/dev/null 2>&1
+     /usr/sbin/networksetup -setdnsservers "${ethernet_interface[$i]}" $_dns1 $_dns2 >/dev/null 2>&1
+  done
+
+##########################################################################################  
+# Enable and configure Apple Remote Desktop for localadm
+##########################################################################################
+
+/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -configure -allowAccessFor -specifiedUsers
+/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart -activate -configure -access -on -users localadm -privs -all -restart -agent -menu
+logger "Apple Remote Desktop is enabled and set for localadm"
+
+##########################################################################################
+# Mon_Mac directory                                                                      #
+##########################################################################################
+
+# Create a special directory at /
+if [ ! -d /Mon_Mac ]
+then
+	mkdir -p /Mon_Mac/Personnel/Musique
+	mkdir -p /Mon_Mac/Personnel/Images
+	mkdir -p /Mon_Mac/Professionnel/Archicad
+	echo "Directory Mon_Mac has been created"
+fi
+chmod -R 777 /Mon_Mac/Professionnel
+chmod -R 777 /Mon_Mac/Personnel
+logger "Special directory Mon_Mac has been created"
+
+##########################################################################################
+# Java                                                                                   #
+##########################################################################################
+
+# Remove old Java Installation for OSX
+if [ -f /var/db/receipts/com.apple.pkg.JavaEssentials.plist ]
+then
+	RDR_JAVA_RECEIPTS=$(pkgutil --pkgs=com.apple.pkg.Java*)
+	for ARECEIPT in $RDR_JAVA_RECEIPTS
+	do
+	pkgutil --forget $ARECEIPT
+	rm -rf /var/db/receipts/$ARECEIPT
+	logger "$ARECEIPT" "is deleted"
+	done
+fi
+
+##########################################################################################
+# Time                                                                                   #
+##########################################################################################
+
+# Set Timeserver to Active Directory
+systemsetup -setnetworktimeserver $_ADserver
+ntpdate -u $_ADserver
+logger "Date is synchronized with $_ADserver"
+
+# Set the timezone; see `sudo systemsetup -listtimezones` for other values
+systemsetup -settimezone "Europe/Lausanne" > /dev/null 2>&1
+logger "TimeZone is set to Europe/Lausanne"
+
+##########################################################################################
+# Others                                                                                 #
+##########################################################################################
+
+# remove rdr directory at /usr/local if exist
+if [ -d /usr/local/rdr ]
+then
+	rm -rf /usr/local/rdr
+	logger "Directory /usr/local/rdr has been deleted"
+fi
+
+# ----------------------------------------------------------------------------------------
+# End of script
+# ----------------------------------------------------------------------------------------
+# Remove setup LaunchDaemon item
+rm -rf /Library/LaunchDaemons/com.yena.initialsetup.plist
+logger "File com.yena.initialsetup.plist has been deleted"
+
+# Make script self-destruct
+logger "Script has been successfully deleted"
+rm -rf $0
